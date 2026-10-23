@@ -76,12 +76,16 @@ One Gladys device per sensor, named as in the SensorPush app:
 - The **sensor list** (`POST /devices/sensors`: names, battery, signal, one
   request) is read at the start, then every hour, and when a sample comes
   from a sensor not known yet (at most every 30 minutes); once sensors are
-  known, never in a read that signs in.
+  known, not in a read that signs in, unless the list is more than 2 hours
+  old (with an interval of 50 minutes or more, every read signs in: the
+  list is then read every 2 hours or so). The battery and the signal of a
+  list more than 2 hours old are no longer published.
 - So a read sends 1 request most of the time, 3 when it signs in (every 50
-  minutes) or reads the list (every hour), and 4 only for the very first
-  read: the limit of one request a minute is applied **per read**, the
-  requests of a read follow each other at once. Choose 2 minutes or more if
-  you want to stay strictly under one request a minute.
+  minutes) or reads the list (every hour), and 4 for the very first read or
+  a late list: the limit of one request a minute is applied **per read**,
+  the requests of a read follow each other at once. With 2 minutes or more,
+  the integration stays **on average** under one request a minute; the
+  requests of one read still follow each other.
 - If a request refuses a token taken from memory, the integration signs in
   **once** more and asks again. A token obtained in the same read and
   refused (the API access of the account not activated, for example) is a
@@ -114,7 +118,9 @@ One Gladys device per sensor, named as in the SensorPush app:
 
 - A sample is recognised by its own instant (`observed`, as SensorPush gives
   it): each sample is handed to Gladys **once**. The last `observed` handed
-  over is kept under `/data`, so a restart never sends it again. A sensor
+  over is kept under `/data` (written at once by a clean stop), so a restart
+  does not send it again; only a brutal stop within the minute after a read
+  may send it once more. A sensor
   that stops reporting therefore sends **nothing** until it reports again:
   neither its measures nor its battery nor its signal, which are only sent
   together with a new sample.

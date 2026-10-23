@@ -82,13 +82,18 @@ Un appareil Gladys par capteur, nommé comme dans l'application SensorPush :
 - La **liste des capteurs** (`POST /devices/sensors` : noms, pile, signal,
   une requête) est lue au démarrage, puis toutes les heures, et quand une
   mesure vient d'un capteur encore inconnu (au plus toutes les 30 minutes) ;
-  une fois des capteurs connus, jamais dans une lecture qui se connecte.
+  une fois des capteurs connus, pas dans une lecture qui se connecte, sauf si
+  la liste a plus de 2 heures (avec un intervalle de 50 minutes ou plus,
+  chaque lecture se connecte : la liste est alors lue environ toutes les 2
+  heures). La pile et le signal d'une liste de plus de 2 heures ne sont plus
+  publiés.
 - Une lecture envoie donc 1 requête la plupart du temps, 3 quand elle se
   connecte (toutes les 50 minutes) ou lit la liste (toutes les heures), et 4
-  seulement pour la toute première lecture : la limite d'une requête par
-  minute est appliquée **par lecture**, les requêtes d'une lecture
-  s'enchaînent aussitôt. Choisissez 2 minutes ou plus pour rester
-  strictement sous une requête par minute.
+  pour la toute première lecture ou une liste en retard : la limite d'une
+  requête par minute est appliquée **par lecture**, les requêtes d'une
+  lecture s'enchaînent aussitôt. Avec 2 minutes ou plus, l'intégration reste
+  **en moyenne** sous une requête par minute ; les requêtes d'une même
+  lecture s'enchaînent toujours.
 - Si une requête refuse un jeton pris en mémoire, l'intégration se
   reconnecte **une** fois et redemande. Un jeton obtenu dans la même lecture
   et refusé (l'accès à l'API du compte non activé, par exemple) est un
@@ -124,8 +129,10 @@ Un appareil Gladys par capteur, nommé comme dans l'application SensorPush :
 
 - Une mesure est reconnue à son propre instant (`observed`, tel que
   SensorPush le donne) : chaque mesure est remise à Gladys **une seule
-  fois**. Le dernier `observed` remis est gardé sous `/data`, donc un
-  redémarrage ne la renvoie jamais. Un capteur qui ne remonte plus n'envoie
+  fois**. Le dernier `observed` remis est gardé sous `/data` (écrit tout de
+  suite par un arrêt propre), donc un redémarrage ne la renvoie pas ; seul
+  un arrêt brutal dans la minute qui suit une lecture peut la renvoyer une
+  fois. Un capteur qui ne remonte plus n'envoie
   donc **plus rien** jusqu'à ce qu'il remonte à nouveau : ni ses mesures, ni
   sa pile, ni son signal, qui ne partent qu'avec une nouvelle mesure.
 - Son âge est mesuré avec l'horloge de SensorPush (la `Date` de sa réponse),

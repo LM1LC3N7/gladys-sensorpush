@@ -23,7 +23,9 @@ the notes of the version's GitHub Release.
   reconnection, a saved configuration, the Discovery tab nor a restart (the
   instant of the last request is kept under `/data`, written at most once
   per minute). One request per read; 3 when it signs in (every 50 minutes)
-  or reads the sensor list (every hour, never in the same read).
+  or reads the sensor list (every hour, not in the same read unless the
+  list is more than 2 hours old; its battery and signal are no longer
+  published past 2 hours).
 - A refused e-mail or password stops the sign-ins for good, also after a
   restart, until you change them or press the test button: the account is
   never locked by repeated attempts. The same for data refused right after

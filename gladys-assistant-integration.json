@@ -68,8 +68,8 @@
         "fr": "Intervalle de lecture (minutes)"
       },
       "description": {
-        "en": "Each read sends one request for the last values of every sensor; 2 more when it signs in (every 50 minutes) or 1 more when it reads the sensor list (every hour), one right after the other. Nothing reads sooner, not even the test button or a restart. The official API page asks for no more than one request a minute: 2 minutes or more stays strictly under it.",
-        "fr": "Chaque lecture envoie une requête pour les dernières valeurs de tous les capteurs ; 2 de plus quand elle se connecte (toutes les 50 minutes) ou 1 de plus quand elle lit la liste des capteurs (toutes les heures), à la suite. Rien ne lit plus tôt, ni le bouton de test ni un redémarrage. La page officielle de l'API demande au plus une requête par minute : 2 minutes ou plus reste strictement en dessous."
+        "en": "Each read sends one request for the last values of every sensor; 2 more when it signs in (every 50 minutes) or 1 more when it reads the sensor list (every hour), one right after the other. Nothing reads sooner, not even the test button or a restart. The official API page asks for no more than one request a minute: with 2 minutes or more, the integration stays under it on average (the requests of one read still follow each other).",
+        "fr": "Chaque lecture envoie une requête pour les dernières valeurs de tous les capteurs ; 2 de plus quand elle se connecte (toutes les 50 minutes) ou 1 de plus quand elle lit la liste des capteurs (toutes les heures), à la suite. Rien ne lit plus tôt, ni le bouton de test ni un redémarrage. La page officielle de l'API demande au plus une requête par minute : avec 2 minutes ou plus, l'intégration reste en dessous en moyenne (les requêtes d'une même lecture s'enchaînent toujours)."
       },
       "required": false,
       "default": 5,

@@ -262,11 +262,11 @@ export class AccountStore {
   }
 
   /** Write the file now if something changed and a write is allowed; returns whether it is on disk. */
-  flush() {
+  flush({ force = false } = {}) {
     if (!this.dirty) {
       return true;
     }
-    if (!this.canWrite()) {
+    if (!force && !this.canWrite()) {
       this.scheduleFlush();
       return false;
     }

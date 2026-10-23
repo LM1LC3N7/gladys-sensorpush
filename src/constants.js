@@ -23,6 +23,12 @@ export const MAX_ENTRIES = 1000;
 /** The list of the sensors (names, battery, signal) is read again this often. */
 export const SENSORS_REFRESH = 60 * 60_000;
 
+/**
+ * A list older than this is read even in a read that signs in, and the
+ * battery and the signal it gave are no longer published.
+ */
+export const HEALTH_STALE = 2 * 60 * 60_000;
+
 /** A refresh of the list that failed (sensors known): tried again after this. */
 export const SENSORS_RETRY = 30 * 60_000;
 

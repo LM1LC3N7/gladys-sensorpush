@@ -68,10 +68,18 @@
   refused password (lot 13 lesson). Never two sign-ins in a read.
 - **Rate (official page)**: https://www.sensorpush.com/gateway-cloud-api
   asks for no more than one request a minute. A read sends 1 request
-  (`/samples`), 3 when it signs in or reads the list (never both once
-  sensors are known), 4 for the very first read; the requests of a read
-  are not spaced: the limit is applied per read, documented honestly, and
-  the docs advise 2 minutes or more to stay strictly under it.
+  (`/samples`), 3 when it signs in or reads the list (not both once
+  sensors are known, unless the list is more than 2 hours old), 4 for the
+  very first read or a late list; the requests of a read are not spaced:
+  the limit is applied per read, documented honestly; with 2 minutes or
+  more the integration stays under it on average only.
+- **Approval 1 fixes**: with an interval of 50 minutes or more every read
+  signs in, so a list more than 2 hours old is read even in a read that
+  signs in, and the battery and the signal of a list more than 2 hours old
+  are no longer published (tested over 5 hours at 60 minutes). `shutdown()`
+  writes /data at once (the last published `observed`), even within the
+  one-minute gap: only a brutal stop within the minute after a read may
+  send a sample once more (documented).
 - **Refused password = final (lot 12 lesson)**: 400/401/403 on
   `/oauth/authorize` stops every periodic sign-in, persisted in `/data`,
   also after a restart (salted scrypt fingerprint of the refused pair, only

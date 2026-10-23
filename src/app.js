@@ -12,6 +12,7 @@ import {
   BUSY_MAX,
   BUSY_MIN,
   FUTURE_TOLERANCE,
+  HEALTH_STALE,
   HEARTBEAT,
   MAX_SENSORS,
   RECENT_MARGIN,
@@ -168,7 +169,9 @@ export class SensorPushApp {
   /** The container stops: the state file is written if allowed, the timers dropped. */
   shutdown() {
     this.stop();
-    this.store.flush();
+    // A clean stop happens once per restart: what waits (the last published
+    // `observed`) is written even before the one-minute gap.
+    this.store.flush({ force: true });
     this.store.close();
   }
 
@@ -349,11 +352,14 @@ export class SensorPushApp {
       // comes from a sensor not listed yet (a new one) — never more often
       // than every 30 minutes but for the first one. Once sensors are known,
       // never in a read that already signed in (at most 3 requests a read).
+      // A list older than 2 hours is read even in such a read (with an
+      // interval of 50 minutes or more, every read signs in).
+      const listAge = now - this.store.get().sensorsReadAt;
       const due =
         this.sensors.size === 0 ||
-        (!this.signedInThisRead &&
-          now >= this.listRetryAt &&
-          (unknown || now - this.store.get().sensorsReadAt >= SENSORS_REFRESH));
+        (now >= this.listRetryAt &&
+          (unknown || listAge >= SENSORS_REFRESH) &&
+          (!this.signedInThisRead || listAge >= HEALTH_STALE));
       if (due) {
         this.listRetryAt = now + SENSORS_RETRY;
         let list;
@@ -603,7 +609,10 @@ export class SensorPushApp {
       const age = this.ageOf(sample, now);
       const dated = !isNew || age > this.recentMs();
       const createdAt = new Date(now - age).toISOString();
-      const values = { ...sensor.health, ...sample.values };
+      // The battery and the signal only while the list is at most 2 hours
+      // old: never a frozen value republished as new.
+      const healthFresh = now - this.store.get().sensorsReadAt <= HEALTH_STALE;
+      const values = { ...(healthFresh ? sensor.health : {}), ...sample.values };
       let sent = false;
       for (const state of statesOf(this.gladys, { sensorKey: sensor.key, values })) {
         const id = state.device_feature_external_id;

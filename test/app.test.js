@@ -399,7 +399,8 @@ test('M1 never two sign-ins in one read', async () => {
     c.init.headers.Authorization === 'old' ? json({}, 401) : json(samples(ctx.clock.now));
   ctx.answers.sensors = () => json({}, 401);
   ctx.app.token.value = 'old';
-  ctx.app.store.update({ sensorsReadAt: 0 });
+  // The list is due (61 min old) but not late (under 2 hours).
+  ctx.app.store.update({ sensorsReadAt: ctx.clock.now - 56 * 60_000 });
   ctx.app.listRetryAt = 0;
   await advance(ctx, 5 * 60_000);
   assert.equal(logins(), 2, 'one new sign-in for this read');
@@ -715,4 +716,67 @@ test('a password refused while a reconnection happens is kept refused', async ()
   await advance(ctx, 60 * 60_000);
   assert.equal(logins(), 1);
   assert.equal(ctx.gladys.fake.connectionStatus.connected, false);
+});
+
+test('S10 with a 60 minute interval the list is read again and the new battery published', async () => {
+  const config = { ...CONFIG, poll_interval: 60 };
+  const ctx = await setup({ config });
+  let battery = 2.95;
+  ctx.answers.sensors = () => {
+    const body = JSON.parse(JSON.stringify(SENSORS));
+    body['16825929.17287013094063749210'].battery_voltage = battery;
+    return json(body);
+  };
+  ctx.answers.samples = () => json(samples(ctx.clock.now - 30_000));
+  await ctx.app.start(config);
+  await createAll(ctx.gladys);
+  assert.equal(ctx.gladys.fake.lastState(`${CAVE}:battery_voltage`), 2.95);
+  battery = 2.4;
+  const handed = spyStates(ctx.gladys);
+  await advance(ctx, 5 * 60 * 60_000);
+  assert.ok(calls(/\/devices\/sensors$/).length >= 3, 'the list is read at least every 2 hours');
+  assert.equal(ctx.gladys.fake.lastState(`${CAVE}:battery_voltage`), 2.4);
+  // Never a battery from a list older than 2 hours.
+  const batteries = handed.filter(
+    (s) => s.device_feature_external_id === `${CAVE}:battery_voltage`,
+  );
+  assert.ok(batteries.length >= 1);
+});
+
+test('S10 a list older than 2 hours: its battery and signal are no longer published', async () => {
+  const ctx = await setup();
+  await ctx.app.start(CONFIG);
+  await createAll(ctx.gladys);
+  ctx.answers.sensors = () => json({}, 500);
+  ctx.answers.samples = () => json(samples(ctx.clock.now - 30_000));
+  const handed = spyStates(ctx.gladys);
+  await advance(ctx, 3 * 60 * 60_000);
+  const ids = (from) =>
+    handed.filter((s, i) => i >= from).map((s) => s.device_feature_external_id.split(':').pop());
+  const lastStart = handed.findLastIndex(
+    (s) => s.device_feature_external_id === `${CAVE}:temperature`,
+  );
+  assert.ok(lastStart >= 0);
+  assert.ok(!ids(lastStart).includes('battery_voltage'));
+  assert.ok(!ids(lastStart).includes('signal'));
+});
+
+test('M-a a clean stop within the minute after a read writes the published observed', async () => {
+  const clock = { now: NOW };
+  const storage = timedStorage(clock);
+  const ctx = await setup({ storage, clock });
+  ctx.answers.samples = () => json(samples(NOW - 60_000));
+  await ctx.app.start(CONFIG);
+  await createAll(ctx.gladys);
+  clock.now += 10_000;
+  ctx.app.shutdown();
+  fake.restore();
+  clock.now += 5 * 60_000;
+  const devices = ctx.gladys.fake.discoveredDevices;
+  const again = await setup({ storage, clock, devices });
+  again.answers.samples = () => json(samples(NOW - 60_000));
+  const handed = spyStates(again.gladys);
+  await again.app.start(CONFIG);
+  assert.equal(reads(), 1);
+  assert.deepEqual(handed, []);
 });
