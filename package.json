@@ -1,6 +1,6 @@
 {
   "name": "gladys-sensorpush",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "SensorPush for Gladys Assistant: your SensorPush temperature, humidity and pressure sensors, read through the official SensorPush Gateway Cloud API (G1 gateway), read only.",
   "type": "module",

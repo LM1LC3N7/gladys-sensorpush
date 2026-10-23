@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-23
+
 ### Added
 
 - Your SensorPush sensors in Gladys (HT1, HT.w, HTP.xw...), read only,
@@ -42,3 +44,6 @@ the notes of the version's GitHub Release.
 - A connection status that names the sensors without value and why, and a
   "Test SensorPush" button that reads what is due and shows the last values
   and the time of the next possible read.
+
+[Unreleased]: https://github.com/LM1LC3N7/gladys-sensorpush/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-sensorpush/releases/tag/v0.1.1
