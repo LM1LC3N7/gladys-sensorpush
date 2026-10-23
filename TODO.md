@@ -22,9 +22,12 @@
       an account without API access.
 - [ ] What a data route answers for an expired token (400, 401 or 403: all
       give one new sign-in).
-- [ ] Whether the API sends `Retry-After` with a 429, and the rate limit
-      (the docs ask for no more than one read a minute: the minimum
-      interval).
+- [ ] Whether the API sends `Retry-After` with a 429, and how strictly the
+      limit of the official page (https://www.sensorpush.com/gateway-cloud-api:
+      no more than one request a minute) counts the 3 requests of a read
+      that signs in or reads the list.
+- [ ] The lifetime of the access token: one hour per the swagger and
+      sensorpush-ha, 12 hours per the official page (50 minutes used).
 - [ ] The `Date` header of the answers (used to date the samples; without
       it, the clock of Gladys is used).
 - [ ] The exact sensor ids (`<device id>.<long id>`) and the `type` values
@@ -56,12 +59,19 @@
   gateway route in this milestone. The local mode of SensorPush is
   Bluetooth only: left out (no Bluetooth in the containers).
 - **Sign-in (no refresh token in this API)**: e-mail + password →
-  authorization → access token, kept in memory only, used 50 minutes (it
-  is valid one hour, sensorpush-ha); renewed in the read that needs it,
-  never by a timer. A data route refusing the token (400/401/403) drops it
-  and gives ONE new sign-in in the same read, then the route once more;
-  refused again, the error "data refused even with a new sign-in" is kept
-  until the next interval (one sign-in per read at most, never a loop).
+  authorization → access token, kept in memory only, used 50 minutes (one
+  hour per the swagger and sensorpush-ha, 12 hours per the official page);
+  renewed in the read that needs it, never by a timer. A data route
+  refusing a token from memory (400/401/403) drops it and gives ONE new
+  sign-in in the same read, then the route once more. A token obtained in
+  the same read and refused is `denied`: a final stop, persisted like a
+  refused password (lot 13 lesson). Never two sign-ins in a read.
+- **Rate (official page)**: https://www.sensorpush.com/gateway-cloud-api
+  asks for no more than one request a minute. A read sends 1 request
+  (`/samples`), 3 when it signs in or reads the list (never both once
+  sensors are known), 4 for the very first read; the requests of a read
+  are not spaced: the limit is applied per read, documented honestly, and
+  the docs advise 2 minutes or more to stay strictly under it.
 - **Refused password = final (lot 12 lesson)**: 400/401/403 on
   `/oauth/authorize` stops every periodic sign-in, persisted in `/data`,
   also after a restart (salted scrypt fingerprint of the refused pair, only
@@ -73,10 +83,10 @@
 - **Pace (lot 11 lessons)**: the instant of every read is recorded and
   written to `/data` before the request leaves (a read waits until 60 s
   have passed since the previous write); nothing reads before that instant
-  - the interval: not the test button, a reconnection, a saved
-    configuration, the Discovery tab (it publishes what is known, with no
-    call) nor a restart. A reconnection during a read starts no other read
-    (the reads are chained). Default interval 5 minutes (1 to 60).
+  plus the interval: not the test button, a reconnection, a saved
+  configuration, the Discovery tab (it publishes what is known, with no
+  call) nor a restart. A reconnection during a read starts no other read
+  (the reads are chained). Default interval 5 minutes (1 to 60).
 - **Late answers**: a generation and the credentials are checked after
   every await; an answer of an old configuration publishes nothing and sets
   no status (only a 429/5xx pause is kept when the same credentials are
@@ -86,10 +96,11 @@
   interval. The sensor list is secondary once sensors are known: its
   passing failure never stops the samples (tried again in 30 minutes).
 - **Identity**: one device per sensor id of the API (the key of
-  `/devices/sensors` and of `/samples`); external id
-  `sensor:<id in lowercase, other characters as ->`; a sample is applied
-  only to the sensor listed under the same id; an id that does not look
-  like one is skipped, never taken as another sensor. A sample of an
+  `/devices/sensors` and of `/samples`), of the form `<digits>.<digits>`;
+  external id `sensor:<id, its dot as ->` (no two ids give the same key);
+  a sample is applied only to the sensor listed under the same id; an
+  entry of another form (`constructor`...) is skipped, never taken as a
+  sensor. A sample of an
   unlisted sensor reads the list again (at most every 30 minutes).
   Inactive sensors (`active: false`) are left out.
 - **Categories and units of the core only** (checked by
@@ -104,13 +115,18 @@
 - **Values**: a value out of the feature bounds is left out, never clamped;
   never NaN, null or undefined published; only own fields are read
   (`Object.hasOwn`): no prototype pollution.
-- **Dated samples (lot 12 lesson)**: a sample is dated by its `observed`,
-  converted to the clock of Gladys with the `Date` header of the answer
-  (lot 13 lesson: the service time, never the Gladys clock, when readable);
-  older than 1 hour (or 2 intervals) it is not published. A reading is
-  handed to Gladys once per feature: the same sample is never republished
-  as new (so the SDK heartbeat never refreshes a dead sensor). The
-  battery and the signal are dated by the answer of the sensor list.
+- **Samples (lot 12 lesson on `created_at`)**: a sample is told apart by
+  its raw `observed` (never by an instant converted between clocks); the
+  last one handed to Gladys is kept per sensor under `/data`, so a sample
+  is handed over once, also across a restart (a feature created since gets
+  it dated). Its age is measured on the service clock (the `Date` header,
+  lot 13 lesson; the clock of Gladys without it): a new sample at most
+  max(10 min, interval + 2 min) old is current; older, up to 1 hour, it is
+  published dated (`created_at`: no scene); older than 1 hour, never,
+  whatever the interval. A sample more than 5 minutes ahead of the service
+  clock is ignored. The battery and the signal are published only with a
+  new sample of the same sensor (same date), never alone: a silent sensor
+  sends nothing at all, and the SDK heartbeat never sees an old sample.
 - **Bounded answers**: 1 MB, 15 s per request (body included), the chunks
   joined once; at most 1,000 entries of an answer looked at, 50 sensors
   published.
@@ -127,6 +143,23 @@
   accepts 300), the budget reserved before each await.
 - **No sensitive command, no energy index, no scene event**: none of the
   rules about commands, energy indexes or `publishSceneEvent` applies.
+
+- **Review 1 fixes**:
+  - B1: samples told apart by the raw `observed`; battery and signal only
+    with a new sample; a silent sensor hands nothing to
+    `publishChangedStates` (tested over 3 hours with a varying latency and
+    a `Date` to the second).
+  - B2: a token refused right after a sign-in is a final stop (`denied`,
+    persisted with `refusal: "data"`), lifted only by other credentials or
+    the test button (tested across a restart).
+  - I1: current only if recent, dated up to 1 hour, never older; the last
+    published `observed` kept under `/data`.
+  - I2: the official page cited for the rate limit and the token lifetime;
+    the list never in a read that signs in; the per-read rate documented.
+  - M1: one sign-in per read at most. M2: a sample in the future of the
+    service ignored. M3: the unit column says "none (in the name)". M4/M5:
+    sensor ids must be `<digits>.<digits>`, the key keeps every digit (no
+    collision), other entries are skipped.
 
 ## Ideas
 

@@ -11,8 +11,11 @@ import {
   BUSY_BASE,
   BUSY_MAX,
   BUSY_MIN,
+  FUTURE_TOLERANCE,
   HEARTBEAT,
   MAX_SENSORS,
+  RECENT_MARGIN,
+  RECENT_MIN,
   SENSORS_REFRESH,
   SENSORS_RETRY,
   STALE,
@@ -39,17 +42,19 @@ const numberText = (value, lang) => {
 
 const asSourceError = (err) => (err instanceof SourceError ? err : new SourceError('failed'));
 
-const newSensor = ({ key, id, name, model = '', fields = [] }) => ({
+const newSensor = ({ key, id, name, model = '', fields = [], observed = 0 }) => ({
   key,
   id,
   name,
   model,
   /** Every feature key ever read. */
   fields: new Set(fields),
-  /** { values, at } of the last sample (at: its instant on the clock of Gladys). */
+  /** { values, observed, age, readAt } of the last sample (see applySamples). */
   sample: null,
-  /** { values, at } of the battery and the signal, from the last sensor list. */
-  health: null,
+  /** The battery and the signal, from the last sensor list (sent with a sample). */
+  health: {},
+  /** The raw `observed` of the last sample handed to Gladys (kept under /data). */
+  publishedObserved: observed,
 });
 
 export class SensorPushApp {
@@ -128,7 +133,7 @@ export class SensorPushApp {
       // After a restart, the status says at once that the password is
       // refused or the reads paused, without asking SensorPush.
       if (saved.refused) {
-        this.error = 'refused';
+        this.error = saved.refusal === 'data' ? 'denied' : 'refused';
       } else if (!this.error && saved.pausedUntil > this.now()) {
         this.error = 'busy';
       }
@@ -191,14 +196,20 @@ export class SensorPushApp {
     return this.config.pollMinutes * 60_000;
   }
 
-  staleMs() {
-    return Math.max(STALE, 2 * this.intervalMs());
+  /**
+   * A sample this recent is published as current (without a date): the
+   * interval plus a margin, 10 minutes at least, never past STALE. Older,
+   * up to STALE (1 hour), it is published dated (`created_at`), which fires
+   * no scene; older than that, never.
+   */
+  recentMs() {
+    return Math.min(STALE, Math.max(RECENT_MIN, this.intervalMs() + RECENT_MARGIN));
   }
 
   /**
-   * The earliest read: the interval and a pause are always kept; a refused
-   * password is never tried again by a periodic read (only the test button,
-   * or other credentials).
+   * The earliest read: the interval and a pause are always kept; a refusal
+   * (the password, or the data refused right after a sign-in) is never tried
+   * again by a periodic read (only the test button, or other credentials).
    */
   earliest({ manual = false } = {}) {
     const saved = this.store.get();
@@ -276,30 +287,47 @@ export class SensorPushApp {
     if (secret === this.secret) {
       this.token = { value, at: now, secret };
     }
+    // Marked for the whole read: a token obtained in this read is never
+    // replaced by a second sign-in in the same read.
+    this.signedInThisRead = true;
     return { token: value, fresh: true };
   }
 
   /**
-   * Call a data route with a token. A token refused by the route (it may
-   * have expired early) is dropped and ONE new sign-in is made, then the
-   * route asked once more; refused again, the error is kept (no loop).
+   * Call a data route with a token. A token from memory refused by the
+   * route (it may have expired early) is dropped and ONE new sign-in is
+   * made, then the route asked once more. A token obtained in this very
+   * read and refused means the account cannot read its data (API access
+   * not activated...): `denied`, a final stop like a refused password.
    */
   async withToken(call, current) {
-    let { token, fresh } = await this.signIn();
+    const denied = (err) =>
+      asSourceError(err).kind === 'expired'
+        ? new SourceError('denied', 'token refused right after a sign-in')
+        : err;
+    let { token } = await this.signIn();
     if (!current()) {
       return undefined;
     }
     try {
       return await call(token);
     } catch (err) {
-      if (asSourceError(err).kind !== 'expired' || fresh || !current()) {
+      if (asSourceError(err).kind !== 'expired' || !current()) {
         throw err;
       }
+      if (this.signedInThisRead) {
+        throw denied(err);
+      }
+      this.token = null;
       ({ token } = await this.signIn({ force: true }));
       if (!current()) {
         return undefined;
       }
-      return call(token);
+      try {
+        return await call(token);
+      } catch (again) {
+        throw denied(again);
+      }
     }
   }
 
@@ -308,6 +336,7 @@ export class SensorPushApp {
     const generation = this.generation;
     const secret = this.secret;
     const current = () => generation === this.generation && secret === this.secret;
+    this.signedInThisRead = false;
     try {
       const answer = await this.withToken((token) => this.client.lastSamples(token), current);
       if (!current()) {
@@ -318,10 +347,12 @@ export class SensorPushApp {
       const now = this.now();
       // The list: when no sensor is known, every hour, and when a sample
       // comes from a sensor not listed yet (a new one) — never more often
-      // than every 30 minutes but for the first one.
+      // than every 30 minutes but for the first one. Once sensors are known,
+      // never in a read that already signed in (at most 3 requests a read).
       const due =
         this.sensors.size === 0 ||
-        (now >= this.listRetryAt &&
+        (!this.signedInThisRead &&
+          now >= this.listRetryAt &&
           (unknown || now - this.store.get().sensorsReadAt >= SENSORS_REFRESH));
       if (due) {
         this.listRetryAt = now + SENSORS_RETRY;
@@ -337,6 +368,7 @@ export class SensorPushApp {
             !current() ||
             this.sensors.size === 0 ||
             error.kind === 'refused' ||
+            error.kind === 'denied' ||
             error.kind === 'limited'
           ) {
             throw error;
@@ -356,6 +388,7 @@ export class SensorPushApp {
         pausedUntil: 0,
         streak: 0,
         refused: false,
+        refusal: '',
         sensors: this.serialize(),
       });
     } catch (err) {
@@ -363,16 +396,8 @@ export class SensorPushApp {
     }
   }
 
-  /** A server instant -> the same instant on the clock of Gladys (never in the future). */
-  localInstant(instant, serverNow) {
-    const now = this.now();
-    const at =
-      serverNow === null || serverNow === undefined ? instant : instant + (now - serverNow);
-    return Math.min(at, now);
-  }
-
   /** The sensor list replaces the previous one; the fields only grow. */
-  applyList({ sensors, date }) {
+  applyList({ sensors }) {
     const now = this.now();
     const next = new Map();
     for (const raw of sensors.slice(0, MAX_SENSORS)) {
@@ -384,8 +409,10 @@ export class SensorPushApp {
       for (const field of Object.keys(values)) {
         known.fields.add(field);
       }
-      // The battery and the signal of the last contact, dated by the answer.
-      known.health = { values, at: this.localInstant(date ?? now, date) };
+      // The battery and the signal of the last contact: published only with
+      // a new sample of the same sensor, never on their own (a silent
+      // sensor never looks alive through them).
+      known.health = values;
       next.set(raw.key, known);
     }
     this.sensors = next;
@@ -393,19 +420,39 @@ export class SensorPushApp {
     this.store.update({ sensorsReadAt: now });
   }
 
-  /** The last sample of each known sensor, dated by its own `observed`. */
+  /**
+   * The last sample of each known sensor. It keeps its `observed` as the
+   * service gave it (the key that tells a new sample from one already
+   * published), and its age measured on the clock of the service (the
+   * `Date` of the answer; the clock of Gladys without it). A sample more
+   * than 5 minutes in the future of the service is ignored.
+   */
   applySamples({ samples, date }) {
+    const readAt = this.now();
+    const serverNow = date ?? readAt;
     for (const sensor of this.sensors.values()) {
       const sample = samples.get(sensor.id);
       if (!sample || sample.observed === null) {
+        continue;
+      }
+      const age = serverNow - sample.observed;
+      if (age < -FUTURE_TOLERANCE) {
+        continue;
+      }
+      if (sensor.sample && sample.observed < sensor.sample.observed) {
         continue;
       }
       const values = valuesOf('sample', sample.data);
       for (const field of Object.keys(values)) {
         sensor.fields.add(field);
       }
-      sensor.sample = { values, at: this.localInstant(sample.observed, date) };
+      sensor.sample = { values, observed: sample.observed, age: Math.max(0, age), readAt };
     }
+  }
+
+  /** The age of a sample now, on the clock of the service. */
+  ageOf(sample, now = this.now()) {
+    return sample.age + Math.max(0, now - sample.readAt);
   }
 
   /** A failed read: refusal, pause or a passing failure (retried at the interval). */
@@ -419,23 +466,32 @@ export class SensorPushApp {
       }
       // A refusal of the credentials still configured is kept too: they are
       // never tried again on their own.
-      if (error.kind === 'refused' && secret === this.secret) {
-        this.token = null;
-        this.error = 'refused';
-        this.store.update({ refused: true }, secret);
+      if ((error.kind === 'refused' || error.kind === 'denied') && secret === this.secret) {
+        this.recordRefusal(error, secret);
       }
       return;
     }
     this.error = error.kind;
-    if (error.kind === 'refused') {
-      // Final: no periodic sign-in until the credentials change. The
-      // fingerprint of the refused pair is kept only while it is refused.
-      this.token = null;
-      this.store.update({ refused: true }, secret);
+    if (error.kind === 'refused' || error.kind === 'denied') {
+      this.recordRefusal(error, secret);
     } else if (error.kind === 'limited' || error.kind === 'busy') {
       this.recordBusy(error, at);
     }
     this.logger.warn(`SensorPush account: ${this.scrub(error)}`);
+  }
+
+  /**
+   * Final: no periodic sign-in until the credentials change (or the test
+   * button, one try once the interval has passed). The fingerprint of the
+   * refused pair is kept only while it is refused.
+   */
+  recordRefusal(error, secret) {
+    this.token = null;
+    this.error = error.kind;
+    this.store.update(
+      { refused: true, refusal: error.kind === 'denied' ? 'data' : 'login' },
+      secret,
+    );
   }
 
   /** A 429 / 5xx: Retry-After, else 5 minutes doubling; 1 minute to 6 hours. */
@@ -457,6 +513,7 @@ export class SensorPushApp {
       name: s.name,
       model: s.model,
       fields: [...s.fields],
+      observed: s.publishedObserved,
     }));
   }
 
@@ -497,18 +554,27 @@ export class SensorPushApp {
     }
   }
 
-  /** A reading recent enough to be published as current. */
-  isFresh(reading, now = this.now()) {
-    return Boolean(reading) && now - reading.at <= this.staleMs();
+  /** A sample at most one hour old (on the clock of the service). */
+  isFresh(sample, now = this.now()) {
+    return Boolean(sample) && this.ageOf(sample, now) <= STALE;
   }
 
   /**
-   * The fresh values of the created features. A reading is handed to Gladys
-   * once (per feature): the same sample is never sent again as if new, so a
-   * sensor that stopped reporting never looks alive. The core accepts 300
-   * states per minute: past STATES_PER_MINUTE in the last minute, the rest
-   * waits in a backlog (the newest value of each feature) sent as the minute
-   * frees room.
+   * The values of the created features, from each sensor's last sample (the
+   * battery and the signal go with it, never alone). A sample is told apart
+   * by its raw `observed` (never by an instant converted between clocks):
+   *
+   * - a sample is handed to Gladys once per feature; one already published
+   *   (its `observed` kept under /data, so also across a restart) is never
+   *   sent again, but to a feature created since (then dated);
+   * - a new sample at most `recentMs()` old is sent as current; older, up to
+   *   one hour, it is sent dated (`created_at`: no scene fires); older than
+   *   one hour, never.
+   *
+   * So a sensor that stops reporting never looks alive: nothing about it is
+   * sent until it reports again. The core accepts 300 states per minute: past
+   * STATES_PER_MINUTE in the last minute, the rest waits in a backlog (the
+   * newest value of each feature) sent as the minute frees room.
    */
   async publishStates() {
     const created = new Set();
@@ -517,26 +583,50 @@ export class SensorPushApp {
         created.add(feature.external_id);
       }
     }
+    // The features created when the process first published: a feature
+    // outside of it was created since (a value already in Gladys for the
+    // others is never sent again).
+    if (this.baseline === undefined) {
+      this.baseline = new Set(created);
+    }
     if (created.size === 0) {
       return;
     }
     const now = this.now();
+    let advanced = false;
     for (const sensor of this.sensors.values()) {
-      for (const reading of [sensor.sample, sensor.health]) {
-        if (!this.isFresh(reading, now)) {
+      const sample = sensor.sample;
+      if (!sample || !this.isFresh(sample, now)) {
+        continue;
+      }
+      const isNew = sample.observed > sensor.publishedObserved;
+      const age = this.ageOf(sample, now);
+      const dated = !isNew || age > this.recentMs();
+      const createdAt = new Date(now - age).toISOString();
+      const values = { ...sensor.health, ...sample.values };
+      let sent = false;
+      for (const state of statesOf(this.gladys, { sensorKey: sensor.key, values })) {
+        const id = state.device_feature_external_id;
+        if (!created.has(id) || this.pushed.get(id) === sample.observed) {
           continue;
         }
-        for (const state of statesOf(this.gladys, {
-          sensorKey: sensor.key,
-          values: reading.values,
-        })) {
-          const id = state.device_feature_external_id;
-          if (created.has(id) && this.pushed.get(id) !== reading.at) {
-            this.pushed.set(id, reading.at);
-            this.backlog.set(id, state);
-          }
+        if (!isNew && this.baseline.has(id)) {
+          // Already published (before a restart, or before this feature was
+          // seen): never again.
+          continue;
         }
+        this.pushed.set(id, sample.observed);
+        this.backlog.set(id, dated ? { ...state, created_at: createdAt } : state);
+        sent = true;
       }
+      if (sent && isNew) {
+        sensor.publishedObserved = sample.observed;
+        advanced = true;
+      }
+    }
+    if (advanced) {
+      // Written with the next allowed write (at most once per minute).
+      this.store.update({ sensors: this.serialize() }, undefined, { defer: true });
     }
     await this.flushStates();
   }
@@ -621,6 +711,8 @@ export class SensorPushApp {
     const notes = [];
     if (this.error === 'refused') {
       notes.push(T.refusedHelp);
+    } else if (this.error === 'denied') {
+      notes.push(T.deniedHelp);
     }
     if (this.more > 0) {
       notes.push(T.moreSensors(this.more, MAX_SENSORS));
@@ -674,7 +766,7 @@ export class SensorPushApp {
       failing,
     });
     return this.setStatus(
-      this.error !== 'refused' && (anyValue || failing.length === 0),
+      this.error !== 'refused' && this.error !== 'denied' && (anyValue || failing.length === 0),
       this.withNotes(text),
     );
   }
@@ -696,8 +788,8 @@ export class SensorPushApp {
       add(v, 'humidity', lang === 'fr' ? 'humidité' : 'humidity', ' %');
       add(v, 'pressure', lang === 'fr' ? 'pression' : 'pressure', ' hPa');
     }
-    if (this.isFresh(sensor.health, now)) {
-      add(sensor.health.values, 'battery_voltage', lang === 'fr' ? 'pile' : 'battery', ' V');
+    if (this.isFresh(sensor.sample, now)) {
+      add(sensor.health, 'battery_voltage', lang === 'fr' ? 'pile' : 'battery', ' V');
     }
     if (parts.length === 0 || !this.isFresh(sensor.sample, now)) {
       const why = sensor.sample
@@ -707,7 +799,7 @@ export class SensorPushApp {
           : 'not read since the start';
       return `- ${sensor.name}${colon} ${why}`;
     }
-    const minutes = Math.max(0, Math.round((now - sensor.sample.at) / 60_000));
+    const minutes = Math.round(this.ageOf(sensor.sample, now) / 60_000);
     parts.push(lang === 'fr' ? `mesure d'il y a ${minutes} min` : `measured ${minutes} min ago`);
     return `- ${sensor.name}${colon} ${parts.join(', ')}`;
   }

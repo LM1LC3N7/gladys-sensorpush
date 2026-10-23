@@ -27,7 +27,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { MAX_SENSORS, WRITE_GAP } from './constants.js';
 import { featureKeys } from './fields.js';
-import { cleanText } from './sensorpush.js';
+import { cleanText, sensorKeyOf } from './sensorpush.js';
 
 /** A storage in memory (tests, and the fallback). */
 export function memoryStorage(initial) {
@@ -92,18 +92,13 @@ export function fileStorage(path, { logger } = {}) {
 
 const finite = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
 
-const SENSOR_KEY = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const API_ID = /^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/;
-
 /** A sensor read back from the file, or undefined when it does not look right. */
 function sensorOf(value) {
   if (
     !value ||
     typeof value !== 'object' ||
     typeof value.key !== 'string' ||
-    !SENSOR_KEY.test(value.key) ||
-    typeof value.id !== 'string' ||
-    !API_ID.test(value.id)
+    sensorKeyOf(value.id) !== value.key
   ) {
     return undefined;
   }
@@ -117,6 +112,9 @@ function sensorOf(value) {
     name: cleanText(value.name, 60) || value.key,
     model: cleanText(value.model, 30),
     fields: [...new Set(fields)],
+    // The raw `observed` (service time, ms) of the last sample handed to
+    // Gladys: a sample not newer is never sent again, also after a restart.
+    observed: Math.max(0, finite(value.observed)),
   };
 }
 
@@ -153,6 +151,9 @@ export class AccountStore {
       pausedUntil: Math.min(finite(entry.pausedUntil), at + maxPause),
       streak: Math.min(Math.max(0, Math.floor(finite(entry.streak))), 20),
       refused: entry.refused === true,
+      // What was refused: `login` (the password) or `data` (a token right
+      // after a sign-in). Both are final until other credentials.
+      refusal: entry.refused === true ? (entry.refusal === 'data' ? 'data' : 'login') : '',
       fp: typeof entry.fp === 'string' && /^[0-9a-f]{32}$/.test(entry.fp) ? entry.fp : '',
       sensorsReadAt: Math.min(finite(entry.sensorsReadAt), at),
       sensors: Array.isArray(entry.sensors)
@@ -193,9 +194,13 @@ export class AccountStore {
     this.secret = secret;
     if (changed) {
       // Another account may own other sensors: their list is read again.
-      this.update({ refused: false, fp: '', lastAttemptAt: 0, sensorsReadAt: 0 }, undefined, {
-        defer: true,
-      });
+      this.update(
+        { refused: false, refusal: '', fp: '', lastAttemptAt: 0, sensorsReadAt: 0 },
+        undefined,
+        {
+          defer: true,
+        },
+      );
     }
     return { entry: this.entry, changed };
   }
@@ -215,6 +220,9 @@ export class AccountStore {
       next.fp = this.fingerprint(secret);
     } else if (!next.refused) {
       next.fp = '';
+    }
+    if (!next.refused) {
+      next.refusal = '';
     }
     this.entry = next;
     if (JSON.stringify(next) !== JSON.stringify(previous)) {

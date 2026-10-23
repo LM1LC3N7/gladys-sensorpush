@@ -47,7 +47,7 @@ function timedStorage(clock, initial) {
   };
 }
 
-async function setup({ config = CONFIG, storage, clock = { now: NOW } } = {}) {
+async function setup({ config = CONFIG, storage, clock = { now: NOW }, devices } = {}) {
   const answers = {
     authorize: () => json({ authorization: AUTHORIZATION }),
     token: () => json({ accesstoken: TOKEN }),
@@ -60,7 +60,7 @@ async function setup({ config = CONFIG, storage, clock = { now: NOW } } = {}) {
     [/\/devices\/sensors$/, (c) => answers.sensors(c)],
     [/\/samples$/, (c) => answers.samples(c)],
   ]);
-  const gladys = createFakeGladys({ selector: 'sensorpush', config });
+  const gladys = createFakeGladys({ selector: 'sensorpush', config, devices });
   const timers = createFakeTimers();
   const logger = recordingLogger();
   const app = new SensorPushApp({
@@ -339,13 +339,86 @@ test('a token refused by a data route: one new sign-in, then the error is kept (
   assert.equal(logins(), 2);
   assert.equal(reads(), 3);
   assert.equal(ctx.gladys.fake.connectionStatus.connected, true);
-  // Refused every time: one new sign-in per read, never more.
+  // The token of memory refused, then the new one too: a final stop.
   ctx.answers.samples = () => json({ message: 'denied' }, 403);
   await advance(ctx, 5 * 60_000);
-  assert.equal(logins(), 3);
+  assert.equal(logins(), 3, 'one new sign-in in this read, never two');
   assert.equal(reads(), 5);
   assert.match(ctx.gladys.fake.connectionStatus.message.en, /data refused even with a new sign-in/);
-  assert.equal(ctx.app.store.get().refused, false, 'the password is not taken as refused');
+  assert.equal(ctx.gladys.fake.connectionStatus.connected, false);
+  await advance(ctx, 60 * 60_000);
+  assert.equal(logins(), 3, 'no sign-in on its own afterwards');
+  assert.equal(reads(), 5);
+});
+
+test('B2 a token refused right after a sign-in is a final stop, also after a restart', async () => {
+  const clock = { now: NOW };
+  const storage = timedStorage(clock);
+  const ctx = await setup({ storage, clock });
+  ctx.answers.samples = () => json({ message: 'unauthorized' }, 401);
+  await ctx.app.start(CONFIG);
+  assert.equal(logins(), 1, 'one sign-in, no second one in the same read');
+  assert.equal(reads(), 1);
+  assert.match(ctx.gladys.fake.connectionStatus.message.en, /data refused even with a new sign-in/);
+  assert.match(ctx.gladys.fake.connectionStatus.message.en, /no more automatic sign-in/);
+  assert.equal(ctx.gladys.fake.connectionStatus.connected, false);
+  await advance(ctx, 60 * 60_000);
+  assert.equal(fake.calls.length, 3, 'nothing in an hour');
+  assert.equal(storage.load().account.refusal, 'data');
+  assert.ok(!JSON.stringify(storage.load()).includes(PASSWORD));
+  ctx.app.shutdown();
+  fake.restore();
+  const again = await setup({ storage, clock });
+  again.answers.samples = () => json({}, 401);
+  await again.app.start(CONFIG);
+  await advance(again, 60 * 60_000);
+  assert.equal(fake.calls.length, 0, 'nothing after a restart');
+  assert.match(again.gladys.fake.connectionStatus.message.fr, /plus aucune connexion automatique/);
+  // The test button: one try (a sign-in and the samples); it works, the stop is lifted.
+  again.answers.samples = () => json(samples(clock.now - 60_000));
+  await again.app.testConnection();
+  assert.equal(logins(), 1);
+  assert.equal(again.app.store.get().refused, false);
+  await advance(again, 5 * 60_000);
+  assert.ok(reads() >= 2);
+  // Other credentials lift it too.
+  again.answers.samples = () => json({}, 401);
+  await advance(again, 5 * 60_000);
+  assert.equal(again.app.store.get().refusal, 'data');
+  const before = logins();
+  await again.app.start({ ...CONFIG, password: 'another one' });
+  await advance(again, 60_000);
+  assert.equal(logins(), before + 1);
+});
+
+test('M1 never two sign-ins in one read', async () => {
+  const ctx = await setup();
+  await ctx.app.start(CONFIG);
+  // The old token refused by the samples, the new one by the list.
+  ctx.answers.samples = (c) =>
+    c.init.headers.Authorization === 'old' ? json({}, 401) : json(samples(ctx.clock.now));
+  ctx.answers.sensors = () => json({}, 401);
+  ctx.app.token.value = 'old';
+  ctx.app.store.update({ sensorsReadAt: 0 });
+  ctx.app.listRetryAt = 0;
+  await advance(ctx, 5 * 60_000);
+  assert.equal(logins(), 2, 'one new sign-in for this read');
+  assert.equal(calls(/\/devices\/sensors$/).length, 1, 'the list waits for a read without sign-in');
+  // Next read: the list refuses the token of memory: one new sign-in, the
+  // list refuses it too: final.
+  await advance(ctx, 5 * 60_000);
+  assert.equal(logins(), 3);
+  assert.equal(calls(/\/devices\/sensors$/).length, 3);
+  assert.equal(ctx.app.store.get().refusal, 'data', 'the token of this read refused: final');
+});
+
+test('M1 with no sensor known, the list refusing the token of this read: no second sign-in', async () => {
+  const ctx = await setup();
+  ctx.answers.sensors = () => json({}, 403);
+  await ctx.app.start(CONFIG);
+  assert.equal(logins(), 1);
+  assert.equal(calls(/\/devices\/sensors$/).length, 1);
+  assert.equal(ctx.app.store.get().refusal, 'data');
 });
 
 test('a reconnection during a read: no second read, the late answer publishes nothing', async () => {
@@ -413,6 +486,135 @@ test('a sample too old is never published; the same sample is never sent again a
   };
   await advance(ctx, 50 * 60_000);
   assert.equal(sent.length, 1);
+});
+
+/** Spy on publishChangedStates itself: every state handed to it. */
+function spyStates(gladys) {
+  const handed = [];
+  const publish = gladys.publishChangedStates.bind(gladys);
+  gladys.publishChangedStates = async (batch, options) => {
+    handed.push(...batch);
+    return publish(batch, options);
+  };
+  return handed;
+}
+
+test('B1 a silent sensor: nothing handed to Gladys for 3 hours, whatever the latency', async () => {
+  const ctx = await setup();
+  const observed = NOW - 60_000;
+  let jitter = 0;
+  ctx.answers.samples = () => {
+    // A latency that changes at each read, a Date header to the second.
+    jitter = (jitter + 377) % 1000;
+    ctx.clock.now += jitter;
+    return json(samples(observed), 200, { date: new Date(ctx.clock.now).toUTCString() });
+  };
+  await ctx.app.start(CONFIG);
+  await createAll(ctx.gladys);
+  assert.equal(ctx.gladys.fake.lastState(`${CAVE}:temperature`), 10);
+  const handed = spyStates(ctx.gladys);
+  await advance(ctx, 3 * 60 * 60_000);
+  assert.ok(reads() > 30);
+  assert.ok(calls(/\/devices\/sensors$/).length >= 3, 'the list was read again');
+  assert.deepEqual(handed, [], 'neither the sample nor the battery nor the signal');
+  assert.match(ctx.gladys.fake.connectionStatus.message.en, /Cave \(no recent reading\)/);
+});
+
+test('B1 the battery and the signal go only with a new sample', async () => {
+  const ctx = await setup();
+  ctx.answers.samples = () => json(samples(NOW - 3 * 3600_000));
+  await ctx.app.start(CONFIG);
+  await createAll(ctx.gladys);
+  assert.equal(ctx.gladys.fake.lastState(`${CAVE}:battery_voltage`), undefined);
+  const handed = spyStates(ctx.gladys);
+  ctx.answers.samples = () => json(samples(ctx.clock.now - 30_000));
+  await advance(ctx, 5 * 60_000);
+  const ids = handed.map((s) => s.device_feature_external_id);
+  assert.ok(ids.includes(`${CAVE}:battery_voltage`) && ids.includes(`${CAVE}:temperature`));
+  assert.ok(
+    handed.every((s) => s.created_at === undefined),
+    'a recent sample: current',
+  );
+});
+
+test('I1 a sample of 55 minutes is published dated; never again after a restart; past 1 h never', async () => {
+  const clock = { now: NOW };
+  const storage = timedStorage(clock);
+  const config = { ...CONFIG, poll_interval: 5 };
+  const ctx = await setup({ storage, clock, config });
+  ctx.answers.samples = () => json(samples(NOW - 55 * 60_000));
+  await ctx.app.start(config);
+  await createAll(ctx.gladys);
+  const dated = ctx.gladys.fake.states.filter(
+    (s) => s.device_feature_external_id === `${CAVE}:temperature`,
+  );
+  assert.equal(dated.length, 1);
+  assert.equal(dated[0].created_at, new Date(NOW - 55 * 60_000).toISOString());
+  await advance(ctx, 6 * 60_000);
+  ctx.app.shutdown();
+  fake.restore();
+  // A restart: the same sample (now 61 min old, and already published).
+  const devices = ctx.gladys.fake.discoveredDevices;
+  const again = await setup({ storage, clock, config, devices });
+  again.answers.samples = () => json(samples(NOW - 55 * 60_000));
+  const handed = spyStates(again.gladys);
+  await again.app.start(config);
+  await advance(again, 30 * 60_000);
+  assert.deepEqual(handed, []);
+});
+
+test('I1 a sample already published is never sent again after a restart, even recent', async () => {
+  const clock = { now: NOW };
+  const storage = timedStorage(clock);
+  const ctx = await setup({ storage, clock });
+  ctx.answers.samples = () => json(samples(NOW - 60_000));
+  await ctx.app.start(CONFIG);
+  await createAll(ctx.gladys);
+  await advance(ctx, 5 * 60_000);
+  ctx.app.shutdown();
+  fake.restore();
+  clock.now += 60_000;
+  // The devices created before the restart, loaded by the SDK at connect.
+  const devices = ctx.gladys.fake.discoveredDevices;
+  const again = await setup({ storage, clock, devices });
+  again.answers.samples = () => json(samples(NOW - 60_000));
+  const handed = spyStates(again.gladys);
+  await again.app.start(CONFIG);
+  await advance(again, 10 * 60_000);
+  assert.deepEqual(handed, []);
+  // A new sample: current again.
+  again.answers.samples = () => json(samples(clock.now - 30_000, { temperature: 59 }));
+  await advance(again, 5 * 60_000);
+  assert.equal(again.gladys.fake.lastState(`${CAVE}:temperature`), 15);
+});
+
+test('I1 with a 60 minute interval, a sample older than 1 hour is never published', async () => {
+  const config = { ...CONFIG, poll_interval: 60 };
+  const ctx = await setup({ config });
+  ctx.answers.samples = () => json(samples(NOW - 61 * 60_000));
+  await ctx.app.start(config);
+  await createAll(ctx.gladys);
+  assert.equal(ctx.gladys.fake.lastState(`${CAVE}:temperature`), undefined);
+});
+
+test('M2 a sample in the future of the service is ignored', async () => {
+  const ctx = await setup();
+  ctx.answers.samples = () =>
+    json(samples(NOW + 10 * 60_000), 200, { date: new Date(NOW).toUTCString() });
+  await ctx.app.start(CONFIG);
+  await createAll(ctx.gladys);
+  assert.equal(ctx.gladys.fake.lastState(`${CAVE}:temperature`), undefined);
+});
+
+test('M5 a list key that is not a sensor id (constructor) is no sensor', async () => {
+  const ctx = await setup();
+  ctx.answers.sensors = () =>
+    new Response(JSON.stringify(SENSORS).replace('{', '{"constructor":{"name":"c"},'), {
+      status: 200,
+    });
+  await ctx.app.start(CONFIG);
+  assert.equal(ctx.gladys.fake.discoveredDevices.length, 2);
+  assert.doesNotMatch(ctx.gladys.fake.connectionStatus.message.en, /\bc \(/);
 });
 
 test('the server clock dates the samples: a skewed Gladys clock never makes them stale', async () => {

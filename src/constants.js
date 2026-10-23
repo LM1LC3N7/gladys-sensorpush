@@ -27,9 +27,11 @@ export const SENSORS_REFRESH = 60 * 60_000;
 export const SENSORS_RETRY = 30 * 60_000;
 
 /**
- * An access token is valid one hour (sensorpush-ha): it is used for 50
- * minutes at most, then a new one is asked for, in the read that needs it.
- * There is no refresh token: a new token means the e-mail and password again.
+ * An access token is valid one hour per the swagger and sensorpush-ha (the
+ * official page https://www.sensorpush.com/gateway-cloud-api says 12 hours):
+ * it is used for 50 minutes at most, under the shorter of the two, then a
+ * new one is asked for, in the read that needs it. There is no refresh
+ * token in this flow: a new token means the e-mail and password again.
  */
 export const TOKEN_LIFETIME = 50 * 60_000;
 
@@ -50,10 +52,24 @@ export const BUSY_MIN = 60_000;
 export const BUSY_BASE = 5 * 60_000;
 export const BUSY_MAX = 6 * 60 * 60_000;
 
-/** A reading older than this (or than 2 intervals) is not published as current. */
+/** A sample older than this is never published (dated or not), whatever the interval. */
 export const STALE = 60 * 60_000;
 
-/** An unchanged value is re-sent this often, so Gladys keeps it recent. */
+/**
+ * A new sample at most max(RECENT_MIN, interval + RECENT_MARGIN) old is
+ * published as current; older (up to STALE), it is published dated.
+ */
+export const RECENT_MIN = 10 * 60_000;
+export const RECENT_MARGIN = 2 * 60_000;
+
+/** A sample more than this in the future of the service clock is ignored. */
+export const FUTURE_TOLERANCE = 5 * 60_000;
+
+/**
+ * An unchanged value of a NEW sample is re-sent after this (a sample already
+ * published is never handed to the SDK again, so this never refreshes a
+ * silent sensor).
+ */
 export const HEARTBEAT = 30 * 60_000;
 
 /** The core accepts 300 states per minute: the integration keeps a margin. */

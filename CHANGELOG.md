@@ -22,18 +22,21 @@ the notes of the version's GitHub Release.
 - Read every 5 minutes by default, never faster: not by the test button, a
   reconnection, a saved configuration, the Discovery tab nor a restart (the
   instant of the last request is kept under `/data`, written at most once
-  per minute). One request per read; the sensor list every hour; a sign-in
-  every 50 minutes.
+  per minute). One request per read; 3 when it signs in (every 50 minutes)
+  or reads the sensor list (every hour, never in the same read).
 - A refused e-mail or password stops the sign-ins for good, also after a
   restart, until you change them or press the test button: the account is
-  never locked by repeated attempts. A token refused by SensorPush gives one
-  new sign-in, never a loop. A 429 or 5xx pauses the reads (Retry-After, else
-  5 minutes doubling, between 1 minute and 6 hours), also across a restart.
-  The e-mail, the password and the token are never written under `/data`
-  nor in the logs.
-- A sample older than one hour is never published, its age measured with
-  the clock of SensorPush; a sample is handed to Gladys once, so a sensor
-  that stops reporting never looks alive.
+  never locked by repeated attempts. The same for data refused right after
+  a sign-in (API access not activated). A token refused later gives one new
+  sign-in, never two in a read. A 429 or 5xx pauses the reads (Retry-After,
+  else 5 minutes doubling, between 1 minute and 6 hours), also across a
+  restart. The e-mail, the password and the token are never written under
+  `/data` nor in the logs.
+- Each sample is handed to Gladys once, told apart by its own instant, also
+  across a restart: a sensor that stops reporting sends nothing at all (its
+  battery and signal only go with a new sample). A recent sample is current;
+  one up to an hour old is published dated (no scene fires); older, never.
+  Its age is measured with the clock of SensorPush.
 - A connection status that names the sensors without value and why, and a
   "Test SensorPush" button that reads what is due and shows the last values
   and the time of the next possible read.

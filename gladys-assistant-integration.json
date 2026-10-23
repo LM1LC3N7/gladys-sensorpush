@@ -68,8 +68,8 @@
         "fr": "Intervalle de lecture (minutes)"
       },
       "description": {
-        "en": "One request for the last values of every sensor each time (plus the sensor list every hour, and a sign-in every 50 minutes). Nothing reads sooner, not even the test button or a restart. SensorPush asks not to read more than once a minute.",
-        "fr": "Une requête pour les dernières valeurs de tous les capteurs à chaque fois (plus la liste des capteurs toutes les heures, et une connexion toutes les 50 minutes). Rien ne lit plus tôt, ni le bouton de test ni un redémarrage. SensorPush demande de ne pas lire plus d'une fois par minute."
+        "en": "Each read sends one request for the last values of every sensor; 2 more when it signs in (every 50 minutes) or 1 more when it reads the sensor list (every hour), one right after the other. Nothing reads sooner, not even the test button or a restart. The official API page asks for no more than one request a minute: 2 minutes or more stays strictly under it.",
+        "fr": "Chaque lecture envoie une requête pour les dernières valeurs de tous les capteurs ; 2 de plus quand elle se connecte (toutes les 50 minutes) ou 1 de plus quand elle lit la liste des capteurs (toutes les heures), à la suite. Rien ne lit plus tôt, ni le bouton de test ni un redémarrage. La page officielle de l'API demande au plus une requête par minute : 2 minutes ou plus reste strictement en dessous."
       },
       "required": false,
       "default": 5,
@@ -83,8 +83,8 @@
       "timeout_seconds": 120,
       "label": { "en": "Test SensorPush", "fr": "Tester SensorPush" },
       "description": {
-        "en": "Reads what is due (a refused password is tried again then, once the interval has passed) and shows the last values of each sensor and when the next read can happen.",
-        "fr": "Lit ce qui est dû (un mot de passe refusé est alors réessayé, une fois l'intervalle écoulé) et affiche les dernières valeurs de chaque capteur et l'heure de la prochaine lecture possible."
+        "en": "Reads what is due (a refused account is tried once then, once the interval has passed) and shows the last values of each sensor and when the next read can happen.",
+        "fr": "Lit ce qui est dû (un compte refusé est alors essayé une fois, l'intervalle écoulé) et affiche les dernières valeurs de chaque capteur et l'heure de la prochaine lecture possible."
       }
     }
   ]

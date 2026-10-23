@@ -24,21 +24,22 @@ l'**API officielle SensorPush Gateway Cloud**.
 
 Un appareil Gladys par capteur, nommé comme dans l'application SensorPush :
 
-| Fonction                      | Unité | Remarques                                                 |
-| ----------------------------- | ----- | --------------------------------------------------------- |
-| Température                   | °C    | la température de la pièce dans Gladys                    |
-| Humidité                      | %     |                                                           |
-| Pression                      | hPa   | HTP.xw seulement                                          |
-| Point de rosée                | °C    | une sonde : hors de la moyenne de température de la pièce |
-| Déficit de pression de vapeur | kPa   | utile pour une serre ou une culture                       |
-| Tension de la pile (V)        | V     | environ 3 V neuve ; à remplacer sous environ 2,6 V        |
-| Signal (dB)                   | dB    | le signal Bluetooth entre le capteur et sa passerelle     |
+| Fonction                      | Unité                | Remarques                                                 |
+| ----------------------------- | -------------------- | --------------------------------------------------------- |
+| Température                   | °C                   | la température de la pièce dans Gladys                    |
+| Humidité                      | %                    |                                                           |
+| Pression                      | hPa                  | HTP.xw seulement                                          |
+| Point de rosée                | °C                   | une sonde : hors de la moyenne de température de la pièce |
+| Déficit de pression de vapeur | kPa                  | utile pour une serre ou une culture                       |
+| Tension de la pile (V)        | aucune (dans le nom) | environ 3 V neuve ; à remplacer sous environ 2,6 V        |
+| Signal (dB)                   | aucune (dans le nom) | le signal Bluetooth entre le capteur et sa passerelle     |
 
 - Seul ce que votre capteur mesure est créé (un HT1 n'a pas de pression).
 - SensorPush envoie des °F et des inHg : convertis en °C et en hPa par
   l'intégration, les unités que Gladys liste pour chaque sorte de capteur.
   Gladys n'a pas d'unité pour une tension ni pour un signal en dB : ces deux
-  valeurs sont de simples nombres, l'unité dans leur nom.
+  valeurs n'ont pas d'unité dans Gladys, l'unité est seulement écrite dans
+  leur nom.
 - Les noms des fonctions sont en anglais ; renommez-les à la création si vous
   le souhaitez.
 
@@ -62,26 +63,42 @@ Un appareil Gladys par capteur, nommé comme dans l'application SensorPush :
   connexion, jamais dans une URL, un journal, un statut ni sous `/data`. Pas
   plus que l'adresse e-mail, ni le jeton d'accès que SensorPush renvoie
   (gardé en mémoire seulement).
-- **Intervalle de lecture** : 5 minutes par défaut, de 1 à 60. SensorPush
-  demande de ne pas lire plus d'une fois par minute ; la passerelle envoie
-  ses mesures environ une fois par minute.
+- **Intervalle de lecture** : 5 minutes par défaut, de 1 à 60. La page
+  officielle de l'API
+  ([sensorpush.com/gateway-cloud-api](https://www.sensorpush.com/gateway-cloud-api))
+  demande de ne pas faire de requêtes plus d'une fois par minute ; la
+  passerelle envoie ses mesures environ une fois par minute.
 
 ## À quel rythme SensorPush est lu
 
-- À chaque intervalle, **une requête** demande la dernière mesure de tous
-  les capteurs (`POST /samples`, une mesure chacun).
-- La **liste des capteurs** (`POST /devices/sensors` : noms, pile, signal)
-  est lue au démarrage, puis toutes les heures, et quand une mesure vient
-  d'un capteur encore inconnu (au plus toutes les 30 minutes).
-- Une **connexion** (`POST /oauth/authorize`, puis `POST /oauth/accesstoken`)
-  donne un jeton d'accès valable une heure ; il sert 50 minutes au plus.
-  Cette API n'a pas de jeton de renouvellement : un nouveau jeton demande à
-  nouveau l'e-mail et le mot de passe. Si une requête refuse le jeton,
-  l'intégration se reconnecte **une** fois et redemande ; refusé encore, elle
-  attend l'intervalle suivant (jamais de boucle).
-- **Jamais plus vite que l'intervalle**, compté depuis la dernière requête
-  envoyée : ni par le bouton de test, ni par une reconnexion à Gladys, ni par
-  une configuration enregistrée, ni par l'onglet Découverte, ni par un
+- À chaque intervalle, une lecture envoie **une requête** pour la dernière
+  mesure de tous les capteurs (`POST /samples`, une mesure chacun).
+- Une **connexion** (`POST /oauth/authorize`, puis `POST /oauth/accesstoken` :
+  deux requêtes) donne un jeton d'accès. Le swagger de l'API et la
+  bibliothèque de Home Assistant le donnent valable une heure, la page
+  officielle 12 heures : il sert 50 minutes au plus. Ce mode de connexion
+  n'a pas de jeton de renouvellement : un nouveau jeton demande à nouveau
+  l'e-mail et le mot de passe.
+- La **liste des capteurs** (`POST /devices/sensors` : noms, pile, signal,
+  une requête) est lue au démarrage, puis toutes les heures, et quand une
+  mesure vient d'un capteur encore inconnu (au plus toutes les 30 minutes) ;
+  une fois des capteurs connus, jamais dans une lecture qui se connecte.
+- Une lecture envoie donc 1 requête la plupart du temps, 3 quand elle se
+  connecte (toutes les 50 minutes) ou lit la liste (toutes les heures), et 4
+  seulement pour la toute première lecture : la limite d'une requête par
+  minute est appliquée **par lecture**, les requêtes d'une lecture
+  s'enchaînent aussitôt. Choisissez 2 minutes ou plus pour rester
+  strictement sous une requête par minute.
+- Si une requête refuse un jeton pris en mémoire, l'intégration se
+  reconnecte **une** fois et redemande. Un jeton obtenu dans la même lecture
+  et refusé (l'accès à l'API du compte non activé, par exemple) est un
+  **arrêt définitif**, comme un mot de passe refusé : plus aucune connexion
+  automatique, même après un redémarrage, tant que vous ne changez pas
+  l'e-mail ou le mot de passe ou n'appuyez pas sur le bouton de test. Jamais
+  plus d'une connexion par lecture.
+- **Jamais plus vite que l'intervalle**, compté depuis la dernière lecture :
+  ni par le bouton de test, ni par une reconnexion à Gladys, ni par une
+  configuration enregistrée, ni par l'onglet Découverte, ni par un
   redémarrage du conteneur. Seuls d'autres identifiants sont essayés tout de
   suite. Avant la fin de l'intervalle, le bouton de test affiche les
   dernières valeurs et l'heure de la prochaine lecture possible.
@@ -96,41 +113,63 @@ Un appareil Gladys par capteur, nommé comme dans l'application SensorPush :
   lui-même, même après un redémarrage, pour que le compte ne soit jamais
   bloqué par des essais répétés. Changez l'e-mail ou le mot de passe (il est
   alors essayé tout de suite), ou appuyez sur le bouton de test une fois
-  l'intervalle écoulé (un essai). Vider un champ puis le saisir à nouveau, ou
-  enregistrer la configuration, ne lève jamais le refus.
+  l'intervalle écoulé (un essai ; l'arrêt n'est levé que s'il réussit).
+  Vider un champ puis le saisir à nouveau, ou enregistrer la configuration,
+  ne lève jamais le refus.
 - Une adresse e-mail sans « @ », ou un e-mail ou un mot de passe contenant
   un retour à la ligne ou un caractère de contrôle (un mauvais copier-coller),
   est refusé tout de suite (« non valide ») et jamais envoyé.
-- Une mesure de plus d'une heure (ou de deux intervalles) n'est pas publiée ;
-  son âge est mesuré avec l'horloge de SensorPush (la `Date` de sa réponse),
+
+## Quelles valeurs arrivent dans Gladys
+
+- Une mesure est reconnue à son propre instant (`observed`, tel que
+  SensorPush le donne) : chaque mesure est remise à Gladys **une seule
+  fois**. Le dernier `observed` remis est gardé sous `/data`, donc un
+  redémarrage ne la renvoie jamais. Un capteur qui ne remonte plus n'envoie
+  donc **plus rien** jusqu'à ce qu'il remonte à nouveau : ni ses mesures, ni
+  sa pile, ni son signal, qui ne partent qu'avec une nouvelle mesure.
+- Son âge est mesuré avec l'horloge de SensorPush (la `Date` de sa réponse),
   donc une horloge de Gladys décalée ne la fait jamais paraître plus vieille
-  ni plus récente. Une mesure est remise à Gladys une seule fois : un capteur
-  qui ne remonte plus ne paraît jamais vivant.
+  ni plus récente. Une nouvelle mesure de 10 minutes au plus (ou de
+  l'intervalle + 2 minutes) est envoyée comme valeur actuelle ; plus
+  ancienne, jusqu'à une heure, elle est envoyée **datée** (Gladys
+  l'enregistre à son heure réelle et aucune scène ne se déclenche) ; de plus
+  d'une heure, elle n'est jamais envoyée, quel que soit l'intervalle. Une
+  mesure en avance de plus de 5 minutes sur l'horloge de SensorPush est
+  ignorée.
+- Un appareil créé plus tard reçoit la dernière mesure datée, si elle a
+  moins d'une heure.
 - Si la liste des capteurs échoue alors que des capteurs sont connus, leurs
   mesures sont quand même lues ; la liste est réessayée 30 minutes plus tard.
-- L'heure de la dernière requête, la pause, le refus et les capteurs
-  rencontrés (identifiant, nom, modèle, mesures : rien de secret, jamais
-  l'adresse e-mail ni l'adresse MAC d'un capteur) survivent à une reconnexion
-  et à un redémarrage du conteneur : ils sont gardés dans un fichier sous
-  `/data`. L'heure d'une requête est écrite avant que la requête parte, au
-  plus une fois par minute ; une pause, un refus ou un nouveau capteur est
-  écrit tout de suite. Seulement tant que le mot de passe est refusé, le
-  fichier garde une empreinte salée (scrypt) de l'e-mail et du mot de passe
-  refusés, pour qu'après un redémarrage d'autres identifiants soient essayés
-  tout de suite ; elle est effacée par la première connexion réussie, donc
-  rien dans le fichier ne peut confirmer un mot de passe qui fonctionne.
-- 50 capteurs au plus sont lus ; 250 valeurs au plus sont envoyées à Gladys
-  par minute ; une réponse de plus de 1 Mo, ou de plus de 15 secondes, est
-  abandonnée.
+
+## Ce qui est gardé sous `/data`
+
+L'heure de la dernière lecture, la pause, le refus et les capteurs
+rencontrés (identifiant, nom, modèle, mesures, `observed` de la dernière
+mesure remise à Gladys : rien de secret, jamais l'adresse e-mail ni
+l'adresse MAC d'un capteur) survivent à une reconnexion et à un redémarrage
+du conteneur. L'heure d'une lecture est écrite avant que ses requêtes
+partent, et le fichier est écrit au plus une fois par minute, sauf pour une
+pause, un refus ou un nouveau capteur (écrits tout de suite). Seulement tant
+que le compte est refusé, le fichier garde une empreinte salée (scrypt) de
+l'e-mail et du mot de passe refusés, pour qu'après un redémarrage d'autres
+identifiants soient essayés tout de suite ; elle est effacée par la première
+connexion réussie, donc rien dans le fichier ne peut confirmer un mot de
+passe qui fonctionne.
+
+50 capteurs au plus sont lus ; 250 valeurs au plus sont envoyées à Gladys
+par minute ; une réponse de plus de 1 Mo, ou de plus de 15 secondes, est
+abandonnée.
 
 ## Identifiants externes
 
 `ext:sensorpush:sensor:<identifiant du capteur>`, l'identifiant étant celui
-de l'API SensorPush en minuscules, chaque caractère non alphanumérique
-remplacé par `-` (`16825929.17287013094063749210` donne
-`16825929-17287013094063749210`), puis `:<fonction>` (`temperature`,
-`humidity`, `pressure`, `dew_point`, `vpd`, `battery_voltage`, `signal`).
-Ces identifiants ne changent jamais.
+de l'API SensorPush, de la forme `<nombre>.<nombre>`, son point remplacé par
+`-` (`16825929.17287013094063749210` donne `16825929-17287013094063749210`),
+puis `:<fonction>` (`temperature`, `humidity`, `pressure`, `dew_point`,
+`vpd`, `battery_voltage`, `signal`). Deux identifiants de capteur ne donnent
+jamais le même identifiant externe ; une entrée d'une autre forme n'est pas
+prise pour un capteur. Ces identifiants ne changent jamais.
 
 ## Dépannage
 
@@ -138,8 +177,9 @@ Ces identifiants ne changent jamais.
   SensorPush, et que l'accès à l'API est activé sur dashboard.sensorpush.com.
   Puis changez-les dans la configuration, ou appuyez sur le bouton de test.
 - **« données refusées même après une nouvelle connexion »** : l'accès à
-  l'API n'est peut-être pas activé pour le compte ; connectez-vous sur
-  dashboard.sensorpush.com.
+  l'API n'est probablement pas activé pour le compte : connectez-vous sur
+  dashboard.sensorpush.com et acceptez les conditions de l'API, puis
+  appuyez sur le bouton de test (ou changez le mot de passe).
 - **« pas de mesure récente »** : le capteur n'a pas été entendu par une
   passerelle depuis plus d'une heure (hors de portée, pile vide, passerelle
   hors ligne).

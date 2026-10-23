@@ -23,21 +23,21 @@ read through the **official SensorPush Gateway Cloud API**.
 
 One Gladys device per sensor, named as in the SensorPush app:
 
-| Feature                 | Unit | Notes                                                   |
-| ----------------------- | ---- | ------------------------------------------------------- |
-| Temperature             | °C   | the room temperature of Gladys                          |
-| Humidity                | %    |                                                         |
-| Pressure                | hPa  | HTP.xw only                                             |
-| Dew point               | °C   | a probe: kept out of the room temperature average       |
-| Vapour pressure deficit | kPa  | useful for a greenhouse or a grow room                  |
-| Battery voltage (V)     | V    | about 3 V new; replace the battery below about 2.6 V    |
-| Signal (dB)             | dB   | the Bluetooth signal between the sensor and its gateway |
+| Feature                 | Unit               | Notes                                                   |
+| ----------------------- | ------------------ | ------------------------------------------------------- |
+| Temperature             | °C                 | the room temperature of Gladys                          |
+| Humidity                | %                  |                                                         |
+| Pressure                | hPa                | HTP.xw only                                             |
+| Dew point               | °C                 | a probe: kept out of the room temperature average       |
+| Vapour pressure deficit | kPa                | useful for a greenhouse or a grow room                  |
+| Battery voltage (V)     | none (in the name) | about 3 V new; replace the battery below about 2.6 V    |
+| Signal (dB)             | none (in the name) | the Bluetooth signal between the sensor and its gateway |
 
 - Only what your sensor measures is created (an HT1 has no pressure).
 - SensorPush sends °F and inHg: converted to °C and hPa by the integration,
   the units Gladys lists for each kind of sensor. Gladys has no unit for a
-  voltage nor a signal in dB: these two are plain values, the unit in their
-  name.
+  voltage nor a signal in dB: these two are plain values without unit in
+  Gladys, the unit is only written in their name.
 - The names of the features are in English; rename them when you create
   them if you wish.
 
@@ -59,27 +59,40 @@ One Gladys device per sensor, named as in the SensorPush app:
   (`api.sensorpush.com`), in the body of the sign-in request, never in a
   URL, a log, a status nor under `/data`. Neither is the e-mail address, nor
   the access token SensorPush gives back (kept in memory only).
-- **Read interval**: 5 minutes by default, 1 to 60. SensorPush asks not to
-  read more than once a minute; the gateway uploads about once a minute.
+- **Read interval**: 5 minutes by default, 1 to 60. The official page of the
+  API ([sensorpush.com/gateway-cloud-api](https://www.sensorpush.com/gateway-cloud-api))
+  asks not to make requests more than once a minute; the gateway uploads
+  about once a minute.
 
 ## How often SensorPush is read
 
-- At each interval, **one request** asks for the last sample of every sensor
-  (`POST /samples`, one sample each).
-- The **sensor list** (`POST /devices/sensors`: names, battery, signal) is
-  read at the start, then every hour, and when a sample comes from a sensor
-  not known yet (at most every 30 minutes).
-- A **sign-in** (`POST /oauth/authorize`, then `POST /oauth/accesstoken`)
-  gives an access token valid one hour; it is used 50 minutes at most. There
-  is no refresh token in this API: a new token means the e-mail and the
-  password again. If a request refuses the token, the integration signs in
-  **once** more and asks again; refused again, it waits for the next
-  interval (never a loop).
-- **Never faster than the interval**, counted from the last request sent:
-  not by the test button, a reconnection to Gladys, a saved configuration,
-  the Discovery tab nor a restart of the container. Only other credentials
-  are tried at once. Before the interval has passed, the test button shows
-  the last values and the time of the next possible read.
+- At each interval, a read sends **one request** for the last sample of
+  every sensor (`POST /samples`, one sample each).
+- A **sign-in** (`POST /oauth/authorize`, then `POST /oauth/accesstoken`:
+  two requests) gives an access token. The swagger of the API and the Home
+  Assistant library give it one hour, the official page 12 hours: it is used
+  50 minutes at most. There is no refresh token in this flow: a new token
+  means the e-mail and the password again.
+- The **sensor list** (`POST /devices/sensors`: names, battery, signal, one
+  request) is read at the start, then every hour, and when a sample comes
+  from a sensor not known yet (at most every 30 minutes); once sensors are
+  known, never in a read that signs in.
+- So a read sends 1 request most of the time, 3 when it signs in (every 50
+  minutes) or reads the list (every hour), and 4 only for the very first
+  read: the limit of one request a minute is applied **per read**, the
+  requests of a read follow each other at once. Choose 2 minutes or more if
+  you want to stay strictly under one request a minute.
+- If a request refuses a token taken from memory, the integration signs in
+  **once** more and asks again. A token obtained in the same read and
+  refused (the API access of the account not activated, for example) is a
+  **final stop**, like a refused password: no more automatic sign-in, even
+  after a restart, until you change the e-mail or the password or press the
+  test button. Never more than one sign-in per read.
+- **Never faster than the interval**, counted from the last read: not by the
+  test button, a reconnection to Gladys, a saved configuration, the
+  Discovery tab nor a restart of the container. Only other credentials are
+  tried at once. Before the interval has passed, the test button shows the
+  last values and the time of the next possible read.
 - **Read only**: the integration never writes anything to a sensor, a
   gateway nor the account.
 - When SensorPush answers **429 or a 5xx**, it is left alone for the
@@ -90,47 +103,70 @@ One Gladys device per sensor, named as in the SensorPush app:
   **for good** and the status says so: no new try on its own, even after a
   restart, so that the account is never locked by repeated attempts. Change
   the e-mail or the password (it is then tried at once), or press the test
-  button once the interval has passed (one try). Clearing a field then typing
-  it again, or saving the configuration, never lifts the refusal.
+  button once the interval has passed (one try; the stop is lifted only if
+  it works). Clearing a field then typing it again, or saving the
+  configuration, never lifts the refusal.
 - An e-mail address without "@", or an e-mail or a password holding a line
   break or a control character (a bad copy), is refused at once ("not
   valid") and never sent.
-- A sample older than one hour (or two intervals) is not published; its age
-  is measured with the clock of SensorPush (the `Date` of its answer), so a
-  Gladys clock that is off never makes it look older or newer. A sample is
-  handed to Gladys once: a sensor that stops reporting never looks alive.
+
+## Which values reach Gladys
+
+- A sample is recognised by its own instant (`observed`, as SensorPush gives
+  it): each sample is handed to Gladys **once**. The last `observed` handed
+  over is kept under `/data`, so a restart never sends it again. A sensor
+  that stops reporting therefore sends **nothing** until it reports again:
+  neither its measures nor its battery nor its signal, which are only sent
+  together with a new sample.
+- Its age is measured with the clock of SensorPush (the `Date` of its
+  answer), so a Gladys clock that is off never makes it look older or newer.
+  A new sample at most 10 minutes old (or the interval + 2 minutes) is sent
+  as the current value; older, up to one hour, it is sent **dated** (Gladys
+  records it at its real time and no scene fires); older than one hour, it
+  is never sent, whatever the interval. A sample more than 5 minutes ahead
+  of the clock of SensorPush is ignored.
+- A device created later gets the last sample dated, if it is less than an
+  hour old.
 - If the sensor list fails while sensors are known, their samples are still
   read; the list is tried again 30 minutes later.
-- The instant of the last request, the pause, the refusal and the sensors
-  met (id, name, model, measures: nothing secret, never the e-mail address
-  nor the MAC address of a sensor) survive a reconnection and a restart of
-  the container: they are kept in a file under `/data`. The instant of a
-  request is written before the request leaves, at most once per minute; a
-  pause, a refusal or a new sensor is written at once. Only while the
-  password is refused, the file keeps a salted fingerprint (scrypt) of the
-  refused e-mail and password, so that after a restart other credentials are
-  tried at once; it is erased by the first sign-in that works, so nothing in
-  the file can confirm a password that works.
-- At most 50 sensors are read; at most 250 values are sent to Gladys per
-  minute; an answer larger than 1 MB, or slower than 15 seconds, is
-  abandoned.
+
+## What is kept under `/data`
+
+The instant of the last read, the pause, the refusal and the sensors met
+(id, name, model, measures, `observed` of the last sample handed to Gladys:
+nothing secret, never the e-mail address nor the MAC address of a sensor)
+survive a reconnection and a restart of the container. The instant of a
+read is written before its requests leave, and the file is written at most
+once per minute but for a pause, a refusal or a new sensor (written at
+once). Only while the account is refused, the file keeps a salted
+fingerprint (scrypt) of the refused e-mail and password, so that after a
+restart other credentials are tried at once; it is erased by the first
+sign-in that works, so nothing in the file can confirm a password that
+works.
+
+At most 50 sensors are read; at most 250 values are sent to Gladys per
+minute; an answer larger than 1 MB, or slower than 15 seconds, is
+abandoned.
 
 ## External ids
 
 `ext:sensorpush:sensor:<sensor id>`, the sensor id being the one of the
-SensorPush API in lowercase, each character other than a letter or a digit
-replaced by `-` (`16825929.17287013094063749210` gives
-`16825929-17287013094063749210`), then `:<feature>` (`temperature`,
-`humidity`, `pressure`, `dew_point`, `vpd`, `battery_voltage`, `signal`).
-These ids never change.
+SensorPush API, of the form `<digits>.<digits>`, its dot replaced by `-`
+(`16825929.17287013094063749210` gives `16825929-17287013094063749210`),
+then `:<feature>` (`temperature`, `humidity`, `pressure`, `dew_point`,
+`vpd`, `battery_voltage`, `signal`). Two sensor ids never give the same
+external id; an entry of another form is not taken as a sensor. These ids
+never change.
 
 ## Troubleshooting
 
 - **"e-mail or password refused"**: check them in the SensorPush app, and
   that the API access is activated on dashboard.sensorpush.com. Then change
   them in the configuration, or press the test button.
-- **"data refused even with a new sign-in"**: the API access may not be
-  activated for the account; sign in on dashboard.sensorpush.com.
+- **"data refused even with a new sign-in"**: the API access is probably not
+  activated for the account: sign in on dashboard.sensorpush.com and accept
+  the terms of the API, then press the test button (or change the
+  password).
 - **"no recent reading"**: the sensor has not been heard by a gateway for
   more than an hour (out of range, empty battery, gateway offline).
 - Logs: the level is set with the `LOG_LEVEL` variable.

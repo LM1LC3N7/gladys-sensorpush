@@ -8,7 +8,7 @@ export const utcTime = (ms) => `${new Date(ms).toISOString().slice(11, 16)} UTC`
 /** Why the account or a sensor has no fresh value. */
 export const REASONS = {
   refused: { en: 'e-mail or password refused', fr: 'e-mail ou mot de passe refusé' },
-  expired: {
+  denied: {
     en: 'data refused even with a new sign-in',
     fr: 'données refusées même après une nouvelle connexion',
   },
@@ -37,6 +37,10 @@ export const T = {
   refusedHelp: {
     en: 'SensorPush refused the e-mail or the password: no new sign-in until you change them (or press the test button). Check them on dashboard.sensorpush.com, where the API access of the account must be activated once.',
     fr: "SensorPush a refusé l'e-mail ou le mot de passe : plus aucune connexion tant que vous ne les changez pas (ou que vous n'appuyez pas sur le bouton de test). Vérifiez-les sur dashboard.sensorpush.com, où l'accès à l'API du compte doit avoir été activé une fois.",
+  },
+  deniedHelp: {
+    en: 'SensorPush refused the data right after a sign-in: no more automatic sign-in until you change the e-mail or the password (or press the test button). Activate the API access of the account on dashboard.sensorpush.com.',
+    fr: "SensorPush a refusé les données juste après une connexion : plus aucune connexion automatique tant que vous ne changez pas l'e-mail ou le mot de passe (ou que vous n'appuyez pas sur le bouton de test). Activez l'accès à l'API du compte sur dashboard.sensorpush.com.",
   },
   moreSensors: (n, max) => ({
     en: `${n} more sensor(s) of the account not read (at most ${max}).`,

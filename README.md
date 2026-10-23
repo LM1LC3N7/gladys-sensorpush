@@ -22,12 +22,20 @@ Gladys ⇄ SDK ⇄ src/app.js (SensorPushApp)  what is due, token, pauses, refus
 ```
 
 - **Sign-in**: e-mail and password → authorization code → access token
-  (one hour, used 50 minutes; no refresh token). A token refused by a data
-  route gives ONE new sign-in, then the error is kept until the next
-  interval.
+  (one hour per the swagger, 12 hours per the
+  [official page](https://www.sensorpush.com/gateway-cloud-api); used 50
+  minutes; no refresh token). A token from memory refused by a data route
+  gives ONE new sign-in; a token of the same read refused is a final stop
+  (persisted, like a refused password). Never two sign-ins in a read.
 - **Reads**: `POST /samples` (`limit: 1`) at each interval; the sensor list
   every hour (and when an unknown sensor shows up, at most every 30
-  minutes).
+  minutes), never in a read that signs in: at most 3 requests a read but
+  the first. The official limit of one request a minute is applied per
+  read.
+- **Samples**: told apart by their raw `observed` (kept under `/data`),
+  handed to Gladys once; current if at most max(10 min, interval + 2 min)
+  old, dated (`created_at`) up to 1 hour, never older; battery and signal
+  only with a new sample.
 - **Pace**: 5 minutes by default; never faster than the interval since the
   last request (persisted before it leaves, written at most once per
   minute), test button, reconnections and restarts included.
@@ -36,8 +44,8 @@ Gladys ⇄ SDK ⇄ src/app.js (SensorPushApp)  what is due, token, pauses, refus
   with a salted scrypt fingerprint of the refused pair only, erased by the
   first successful sign-in. **429/5xx** → `Retry-After`, else 5 minutes
   doubling, between 1 minute and 6 hours, persisted.
-- **Devices**: `sensor:<sensor id>` (the API id in lowercase, other
-  characters as `-`), then a feature key of this integration
+- **Devices**: `sensor:<sensor id>` (the API id, `<digits>.<digits>`, its
+  dot as `-`), then a feature key of this integration
   (`temperature`, `dew_point`...). Units of the core only. A feature once
   created is never dropped from the Discovery list.
 

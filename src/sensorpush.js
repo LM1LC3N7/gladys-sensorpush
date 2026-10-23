@@ -20,7 +20,8 @@ import { NetworkError, postJson } from './http.js';
 
 /**
  * kind: refused (the e-mail or the password, on /oauth/authorize), expired
- * (a data route refused the token), limited (429), busy (5xx), invalid (not a
+ * (a data route refused the token), denied (set by the app: a token obtained
+ * in the same read refused), limited (429), busy (5xx), invalid (not a
  * SensorPush answer), failed (network, another status).
  */
 export class SourceError extends Error {
@@ -94,7 +95,10 @@ const tokenOf = (value) =>
     ? value
     : null;
 
-/** Sign in: the e-mail and the password -> an access token (valid one hour). */
+/**
+ * Sign in: the e-mail and the password -> an access token (one hour per the
+ * swagger, 12 hours per the official page: used 50 minutes by the app).
+ */
 export async function authorize({ email, password }) {
   const { body: auth } = await post('/oauth/authorize', { email, password }, 'login');
   const authorization = isObject(auth) ? tokenOf(auth.authorization) : null;
@@ -109,18 +113,18 @@ export async function authorize({ email, password }) {
   return token;
 }
 
+/** The form of a sensor id of the API: `<digits>.<digits>`. */
+export const SENSOR_ID = /^[0-9]{1,20}\.[0-9]{1,40}$/;
+
 /**
  * A sensor id of the API ("16825929.17287013094063749210") -> the platform
- * id of its Gladys device: lowercase, every character other than a letter
- * or a digit replaced by "-" ("16825929-17287013094063749210"). Null when the
- * id is missing or does not look like one (never taken as another sensor).
+ * id of its Gladys device, its dot replaced by "-"
+ * ("16825929-17287013094063749210"): one id gives one key and two ids never
+ * the same one. Null when the id does not have the form `<digits>.<digits>`
+ * (never taken as another sensor; a key such as `constructor` is skipped).
  */
-export const sensorKeyOf = (value) => {
-  if (typeof value !== 'string' || !/^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/.test(value)) {
-    return null;
-  }
-  return value.toLowerCase().replace(/[^a-z0-9]/g, '-');
-};
+export const sensorKeyOf = (value) =>
+  typeof value === 'string' && SENSOR_ID.test(value) ? value.replace('.', '-') : null;
 
 const finiteOrNull = (value) =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;

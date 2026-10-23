@@ -61,16 +61,20 @@ test/                             node --test, against the SDK's fake Gladys (in
   clear in its database (`test/manifest.test.js` checks the manifest and the
   docs).
 - **A refused password is final**: no automatic sign-in until the
-  credentials change or the test button is pressed; a token refused by a
-  data route gives ONE new sign-in, never a loop; a 429 on the sign-in is a
-  pause, never a refusal.
+  credentials change or the test button is pressed. A token from memory
+  refused by a data route gives ONE new sign-in; a token obtained in the
+  same read and refused is final too (`denied`); never two sign-ins in a
+  read; a 429 on the sign-in is a pause, never a refusal.
+- **Samples are told apart by their raw `observed`** (kept under `/data`)
+  and handed to Gladys once; current only when recent, dated up to 1 hour,
+  never older; battery and signal only with a new sample.
 - **Pace.** Never read before the last request + the interval (test button,
   reconnection, saved configuration, Discovery, restart); the instant of a
   request is written to `/data` before it leaves, at most once per minute.
   A generation is checked after every await: a late answer publishes
   nothing and sets no status.
-- **External ids are forever**: `sensor:<API sensor id, lowercase, other
-characters as ->`, then the feature keys of this integration
+- **External ids are forever**: `sensor:<API sensor id, <digits>.<digits>,
+its dot as ->`, then the feature keys of this integration
   (`temperature`, `humidity`, `pressure`, `dew_point`, `vpd`,
   `battery_voltage`, `signal`). The same goes for every key users store:
   manifest `config_schema`, `actions`.
